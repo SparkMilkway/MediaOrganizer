@@ -13,6 +13,12 @@ import logging
 import customtkinter as ctk
 from tkinter import filedialog, messagebox
 import tkcalendar  # 需要安装：pip install tkcalendar
+import imagehash
+from PIL import ImageTk
+
+from .batch_tab import BatchTab
+from .manual_tab import ManualTab
+from .similarity_tab import SimilarityTab
 
 # 设置日志
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -22,12 +28,14 @@ ctk.set_appearance_mode("System")  # 跟随系统主题
 ctk.set_default_color_theme("blue")
 
 class PhotoOrganizerGUI(ctk.CTk):
+    """照片视频整理工具主窗口"""
+    
     def __init__(self):
         super().__init__()
-
+        
         # 配置主窗口
         self.title("照片视频Exif日期修改整理工具")
-        self.geometry("800x600")  # 增加窗口大小以便更好地显示日志
+        self.geometry("800x600")
         
         # 创建消息队列用于线程间通信
         self.message_queue = queue.Queue()
@@ -41,136 +49,33 @@ class PhotoOrganizerGUI(ctk.CTk):
         
         # 定期检查消息队列
         self.check_message_queue()
-
+        
     def create_widgets(self):
+        """创建界面元素"""
         # 主框架
         main_frame = ctk.CTkFrame(self)
         main_frame.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
         main_frame.grid_columnconfigure(1, weight=1)
         
         # 创建选项卡控件
-        tabview = ctk.CTkTabview(main_frame)
-        tabview.grid(row=0, column=0, columnspan=3, padx=5, pady=5, sticky="nsew")
+        self.tabview = ctk.CTkTabview(main_frame)
+        self.tabview.grid(row=0, column=0, columnspan=3, padx=5, pady=5, sticky="nsew")
         main_frame.grid_rowconfigure(0, weight=1)
         
         # 添加选项卡
-        tab_auto = tabview.add("批量处理")
-        tab_manual = tabview.add("手动处理")
+        self.tab_batch = self.tabview.add("批量处理")
+        self.tab_manual = self.tabview.add("手动处理")
+        self.tab_similarity = self.tabview.add("相似照片")
         
         # 配置选项卡
-        for tab in [tab_auto, tab_manual]:
+        for tab in [self.tab_batch, self.tab_manual, self.tab_similarity]:
             tab.grid_columnconfigure(1, weight=1)
+            
+        # 创建选项卡内容
+        self.batch_tab = BatchTab(self.tab_batch, self.log_message)
+        self.manual_tab = ManualTab(self.tab_manual, self.log_message)
+        self.similarity_tab = SimilarityTab(self.tab_similarity, self.log_message)
         
-        # ====== 批量处理选项卡 ======
-        # 输入目录选择
-        ctk.CTkLabel(tab_auto, text="输入目录:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.input_dir_var = ctk.StringVar()
-        input_entry = ctk.CTkEntry(tab_auto, textvariable=self.input_dir_var)
-        input_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        ctk.CTkButton(tab_auto, text="浏览", command=self.browse_input).grid(row=0, column=2, padx=5, pady=5)
-
-        # 输出目录选择
-        ctk.CTkLabel(tab_auto, text="输出目录:").grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        self.output_dir_var = ctk.StringVar()
-        output_entry = ctk.CTkEntry(tab_auto, textvariable=self.output_dir_var)
-        output_entry.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-        ctk.CTkButton(tab_auto, text="浏览", command=self.browse_output).grid(row=1, column=2, padx=5, pady=5)
-
-        # 进度显示
-        self.progress_var = ctk.StringVar(value="准备就绪")
-        progress_label = ctk.CTkLabel(tab_auto, textvariable=self.progress_var)
-        progress_label.grid(row=2, column=0, columnspan=3, padx=5, pady=5)
-
-        # 进度条
-        self.progressbar = ctk.CTkProgressBar(tab_auto)
-        self.progressbar.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-        self.progressbar.set(0)  # 初始化进度条
-        
-        # 开始按钮
-        self.start_button = ctk.CTkButton(
-            tab_auto, 
-            text="开始处理", 
-            command=self.start_processing,
-            height=40  # 增加按钮高度
-        )
-        self.start_button.grid(row=4, column=0, columnspan=3, padx=5, pady=20)
-
-        # ====== 手动处理选项卡 ======
-        # 文件选择框架
-        file_frame = ctk.CTkFrame(tab_manual)
-        file_frame.grid(row=0, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-        
-        # 选择文件按钮
-        ctk.CTkLabel(file_frame, text="选择需要手动处理的文件:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        ctk.CTkButton(file_frame, text="浏览文件", command=self.browse_manual_files).grid(row=0, column=1, padx=5, pady=5)
-        
-        # 显示选择的文件
-        self.selected_files_var = ctk.StringVar(value="未选择文件")
-        self.selected_files_label = ctk.CTkLabel(file_frame, textvariable=self.selected_files_var, wraplength=600)
-        self.selected_files_label.grid(row=1, column=0, columnspan=2, padx=5, pady=5, sticky="w")
-        
-        # 日期选择框架
-        date_frame = ctk.CTkFrame(tab_manual)
-        date_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-        
-        # 创建日期选择控件
-        ctk.CTkLabel(date_frame, text="设置照片拍摄日期:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        
-        # 日期输入框架
-        date_input_frame = ctk.CTkFrame(date_frame)
-        date_input_frame.grid(row=1, column=0, padx=5, pady=5, sticky="w")
-        
-        # 年月日选择
-        self.year_var = ctk.StringVar(value=str(datetime.now().year))
-        self.month_var = ctk.StringVar(value=str(datetime.now().month))
-        self.day_var = ctk.StringVar(value=str(datetime.now().day))
-        
-        # 年选择
-        ctk.CTkLabel(date_input_frame, text="年:").grid(row=0, column=0, padx=5, pady=5)
-        year_entry = ctk.CTkEntry(date_input_frame, textvariable=self.year_var, width=60)
-        year_entry.grid(row=0, column=1, padx=5, pady=5)
-        
-        # 月选择
-        ctk.CTkLabel(date_input_frame, text="月:").grid(row=0, column=2, padx=5, pady=5)
-        month_entry = ctk.CTkEntry(date_input_frame, textvariable=self.month_var, width=40)
-        month_entry.grid(row=0, column=3, padx=5, pady=5)
-        
-        # 日选择
-        ctk.CTkLabel(date_input_frame, text="日:").grid(row=0, column=4, padx=5, pady=5)
-        day_entry = ctk.CTkEntry(date_input_frame, textvariable=self.day_var, width=40)
-        day_entry.grid(row=0, column=5, padx=5, pady=5)
-        
-        # 时间选择（可选）
-        ctk.CTkLabel(date_input_frame, text="时:").grid(row=0, column=6, padx=5, pady=5)
-        self.hour_var = ctk.StringVar(value="12")
-        hour_entry = ctk.CTkEntry(date_input_frame, textvariable=self.hour_var, width=40)
-        hour_entry.grid(row=0, column=7, padx=5, pady=5)
-        
-        ctk.CTkLabel(date_input_frame, text="分:").grid(row=0, column=8, padx=5, pady=5)
-        self.minute_var = ctk.StringVar(value="00")
-        minute_entry = ctk.CTkEntry(date_input_frame, textvariable=self.minute_var, width=40)
-        minute_entry.grid(row=0, column=9, padx=5, pady=5)
-        
-        # 输出目录选择
-        output_frame = ctk.CTkFrame(tab_manual)
-        output_frame.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-        
-        ctk.CTkLabel(output_frame, text="处理后的文件保存到:").grid(row=0, column=0, padx=5, pady=5, sticky="w")
-        self.manual_output_dir_var = ctk.StringVar()
-        manual_output_entry = ctk.CTkEntry(output_frame, textvariable=self.manual_output_dir_var)
-        manual_output_entry.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-        output_frame.grid_columnconfigure(1, weight=1)
-        ctk.CTkButton(output_frame, text="浏览", command=self.browse_manual_output).grid(row=0, column=2, padx=5, pady=5)
-        
-        # 处理按钮
-        self.process_manual_button = ctk.CTkButton(
-            tab_manual, 
-            text="处理选定的文件", 
-            command=self.process_manual_files,
-            height=40
-        )
-        self.process_manual_button.grid(row=3, column=0, columnspan=3, padx=5, pady=20, sticky="ew")
-
         # 日志显示
         log_frame = ctk.CTkFrame(main_frame)
         log_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="nsew")
@@ -184,166 +89,32 @@ class PhotoOrganizerGUI(ctk.CTk):
         self.log_text.pack(fill="both", expand=True, padx=5, pady=5)
         
         # 添加初始日志
-        self.log_text.insert("end", "程序已启动，等待选择目录或文件...\n")
-        self.log_text.see("end")
+        self.log_message("程序已启动，等待选择目录或文件...")
         
-        # 存储手动选择的文件
-        self.manual_files = []
-
-    def browse_input(self):
-        directory = filedialog.askdirectory(title="选择输入目录")
-        if directory:
-            self.input_dir_var.set(directory)
-            if not self.output_dir_var.get():
-                self.output_dir_var.set(directory)
-
-    def browse_output(self):
-        directory = filedialog.askdirectory(title="选择输出目录")
-        if directory:
-            self.output_dir_var.set(directory)
-
-    def browse_manual_files(self):
-        """浏览并选择需要手动处理的文件"""
-        files = filedialog.askopenfilenames(
-            title="选择需要手动处理的照片/视频",
-            filetypes=[
-                ("图片文件", "*.jpg *.jpeg *.png *.heic *.heif"),
-                ("视频文件", "*.mp4 *.mov *.MOV"),
-                ("所有文件", "*.*")
-            ]
-        )
+    def log_message(self, message: str):
+        """添加日志消息到队列"""
+        self.message_queue.put(message)
         
-        if files:
-            self.manual_files = list(files)
-            if len(files) <= 3:
-                file_names = ", ".join([Path(f).name for f in files])
-            else:
-                file_names = ", ".join([Path(f).name for f in files[:3]]) + f"...等 {len(files)} 个文件"
-            
-            self.selected_files_var.set(f"已选择: {file_names}")
-            self.message_queue.put((f"已选择 {len(files)} 个文件进行手动处理", None))
-            
-            # 如果没有设置输出目录，则使用第一个文件的目录作为默认输出目录
-            if not self.manual_output_dir_var.get() and files:
-                default_output = str(Path(files[0]).parent)
-                self.manual_output_dir_var.set(default_output)
-
-    def browse_manual_output(self):
-        """为手动处理选择输出目录"""
-        directory = filedialog.askdirectory(title="选择输出目录")
-        if directory:
-            self.manual_output_dir_var.set(directory)
-
-    def process_manual_files(self):
-        """处理手动选择的文件，设置为指定的日期"""
-        if not self.manual_files:
-            messagebox.showerror("错误", "请先选择需要处理的文件")
-            return
-            
-        if not self.manual_output_dir_var.get():
-            messagebox.showerror("错误", "请选择输出目录")
-            return
-            
-        # 获取用户设置的日期
-        try:
-            year = int(self.year_var.get())
-            month = int(self.month_var.get())
-            day = int(self.day_var.get())
-            hour = int(self.hour_var.get())
-            minute = int(self.minute_var.get())
-            
-            user_date = datetime(year, month, day, hour, minute)
-        except ValueError as e:
-            messagebox.showerror("错误", f"日期格式无效: {str(e)}")
-            return
-            
-        # 禁用处理按钮
-        self.process_manual_button.configure(state="disabled")
-        
-        # 在新线程中处理文件
-        thread = threading.Thread(
-            target=self.process_manual_files_thread, 
-            args=(user_date,)
-        )
-        thread.daemon = True
-        thread.start()
-        
-    def process_manual_files_thread(self, user_date):
-        """在线程中处理手动选择的文件"""
-        try:
-            self.message_queue.put(("开始处理手动选择的文件...", 0.0))
-            
-            output_path = Path(self.manual_output_dir_var.get())
-            output_path.mkdir(parents=True, exist_ok=True)
-            
-            # 创建目标目录
-            year_dir = output_path / str(user_date.year)
-            month_dir = year_dir / f"{user_date.month:02d}"
-            month_dir.mkdir(parents=True, exist_ok=True)
-            
-            processed_count = 0
-            total_files = len(self.manual_files)
-            
-            for file_path in self.manual_files:
-                file = Path(file_path)
-                
-                # 设置文件时间
-                timestamp = user_date.timestamp()
-                os.utime(str(file), (timestamp, timestamp))
-                
-                # 复制到目标目录
-                new_path = month_dir / file.name
-                
-                # 如果目标路径已存在同名文件，添加数字后缀
-                counter = 1
-                while new_path.exists():
-                    new_path = month_dir / f"{file.stem}_{counter}{file.suffix}"
-                    counter += 1
-                
-                shutil.copy2(str(file), str(new_path))
-                
-                processed_count += 1
-                self.message_queue.put((f"已处理文件 {file.name} ({processed_count}/{total_files})", processed_count/total_files))
-                
-            self.message_queue.put((f"所有手动选择的文件处理完成！共处理 {processed_count} 个文件", 1.0))
-            
-            # 显示完成提示
-            self.after(500, lambda: messagebox.showinfo("处理完成", 
-                f"手动选择的文件处理完成！\n\n"
-                f"已将 {processed_count} 个文件处理为日期: "
-                f"{user_date.year}-{user_date.month:02d}-{user_date.day:02d} "
-                f"{user_date.hour:02d}:{user_date.minute:02d}"))
-                
-        except Exception as e:
-            error_msg = f"处理文件时出错: {str(e)}"
-            self.message_queue.put((error_msg, None))
-            messagebox.showerror("错误", error_msg)
-        finally:
-            # 启用处理按钮
-            self.after(0, lambda: self.process_manual_button.configure(state="normal"))
-
-    def update_progress(self, message, progress=None):
-        try:
-            self.progress_var.set(message)
-            if progress is not None:
-                self.progressbar.set(progress)
-            self.log_text.insert("end", f"{datetime.now().strftime('%H:%M:%S')} - {message}\n")
-            self.log_text.see("end")
-            self.update_idletasks()  # 强制更新GUI
-        except Exception as e:
-            print(f"更新进度时出错: {e}")
-
     def check_message_queue(self):
         """检查消息队列并更新GUI"""
         try:
             while True:  # 处理队列中的所有消息
-                message, progress = self.message_queue.get_nowait()
-                self.update_progress(message, progress)
+                message = self.message_queue.get_nowait()
+                self.update_log(message)
         except queue.Empty:
             pass
         finally:
             # 继续检查消息队列
             self.after(100, self.check_message_queue)
+            
+    def update_log(self, message: str):
+        """更新日志显示"""
+        try:
+            self.log_text.insert("end", f"{datetime.now().strftime('%H:%M:%S')} - {message}\n")
+            self.log_text.see("end")
+            self.update_idletasks()
+        except Exception as e:
+            print(f"更新日志时出错: {e}")
 
     def get_creation_date_from_exif(self, file_path: str) -> Optional[datetime]:
         """从文件的EXIF信息中获取创建时间"""
@@ -489,8 +260,8 @@ class PhotoOrganizerGUI(ctk.CTk):
 
     def process_directory(self):
         """处理指定目录下的所有照片和视频文件（包括所有子目录）"""
-        input_dir = self.input_dir_var.get()
-        output_dir = self.output_dir_var.get()
+        input_dir = self.tab_batch.input_dir_var.get()
+        output_dir = self.tab_batch.output_dir_var.get()
         
         input_path = Path(input_dir)
         output_path = Path(output_dir)
@@ -614,10 +385,10 @@ class PhotoOrganizerGUI(ctk.CTk):
             messagebox.showerror("错误", error_msg)
         finally:
             # 重新启用开始按钮
-            self.after(0, lambda: self.start_button.configure(state="normal"))
+            self.after(0, lambda: self.tab_batch.start_button.configure(state="normal"))
             # 重置进度条状态
-            self.progressbar.set(0)
-            self.progress_var.set("准备就绪")
+            self.tab_batch.progressbar.set(0)
+            self.tab_batch.progress_var.set("准备就绪")
 
     def reset_state(self):
         """重置处理状态"""
@@ -626,18 +397,18 @@ class PhotoOrganizerGUI(ctk.CTk):
         self.log_text.insert("end", "已重置状态，准备开始新的处理任务...\n")
         
         # 重置进度条
-        self.progressbar.set(0)
-        self.progress_var.set("准备就绪")
+        self.tab_batch.progressbar.set(0)
+        self.tab_batch.progress_var.set("准备就绪")
         
         # 重新启用开始按钮
-        self.start_button.configure(state="normal")
+        self.tab_batch.start_button.configure(state="normal")
 
     def start_processing(self):
         """开始处理文件"""
-        if not self.input_dir_var.get():
+        if not self.tab_batch.input_dir_var.get():
             messagebox.showerror("错误", "请选择输入目录")
             return
-        if not self.output_dir_var.get():
+        if not self.tab_batch.output_dir_var.get():
             messagebox.showerror("错误", "请选择输出目录")
             return
         
@@ -645,7 +416,7 @@ class PhotoOrganizerGUI(ctk.CTk):
         self.reset_state()
         
         # 禁用开始按钮
-        self.start_button.configure(state="disabled")
+        self.tab_batch.start_button.configure(state="disabled")
         
         # 在新线程中处理文件
         thread = threading.Thread(target=self.process_directory_safe)
