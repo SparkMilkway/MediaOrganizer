@@ -1,8 +1,11 @@
-import customtkinter as ctk
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, 
+    QGridLayout, QPushButton, QLineEdit, QProgressBar
+)
+from PyQt6.QtCore import Qt
 from pathlib import Path
 import threading
 from typing import Callable
-import logging
 
 from .base_tab import BaseTab
 from ..core import FileProcessor, generate_report
@@ -10,79 +13,84 @@ from ..core import FileProcessor, generate_report
 class BatchTab(BaseTab):
     """批量处理选项卡"""
     
-    def __init__(self, parent: ctk.CTkFrame, message_callback: Callable):
+    def __init__(self, parent: QWidget, message_callback: Callable):
         self.message_callback = message_callback
-        self.input_dir_var = ctk.StringVar()
-        self.output_dir_var = ctk.StringVar()
-        self.progress_var = ctk.StringVar(value="准备就绪")
+        self.input_dir_line_edit = QLineEdit()
+        self.output_dir_line_edit = QLineEdit()
+        self.progress_label = None
+        self.progressbar = None
+        self.start_button = None
         super().__init__(parent)
         
     def setup_ui(self):
         """设置UI组件"""
-        # 配置父框架
-        self.parent.grid_columnconfigure(0, weight=1)
-        self.parent.grid_rowconfigure(0, weight=1)
+        # 主布局
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(20, 20, 20, 20)
         
         # 主框架
-        main_frame = ctk.CTkFrame(self.parent)
-        main_frame.grid(row=0, column=0, padx=20, pady=20, sticky="nsew")
-        main_frame.grid_columnconfigure(1, weight=1)
+        main_frame = QFrame()
+        main_layout.addWidget(main_frame)
+        frame_layout = QVBoxLayout(main_frame)
         
         # 输入目录选择
         self.create_directory_selector(
             main_frame,
             "输入目录:",
-            self.input_dir_var,
-            lambda: self.browse_directory("选择输入目录", self.input_dir_var),
-            row=0
+            self.input_dir_line_edit,
+            lambda: self.browse_directory("选择输入目录", self.input_dir_line_edit)
         )
         
         # 输出目录选择
         self.create_directory_selector(
             main_frame,
             "输出目录:",
-            self.output_dir_var,
-            lambda: self.browse_directory("选择输出目录", self.output_dir_var),
-            row=1
+            self.output_dir_line_edit,
+            lambda: self.browse_directory("选择输出目录", self.output_dir_line_edit)
         )
         
         # 进度显示框架
-        progress_frame = ctk.CTkFrame(main_frame)
-        progress_frame.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-        progress_frame.grid_columnconfigure(0, weight=1)
+        progress_frame = QFrame()
+        frame_layout.addWidget(progress_frame)
+        progress_layout = QVBoxLayout(progress_frame)
         
         # 进度显示
-        progress_label = ctk.CTkLabel(
-            progress_frame, 
-            textvariable=self.progress_var,
-            height=30  # 增加高度以便于点击
-        )
-        progress_label.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
+        self.progress_label = QLabel("准备就绪")
+        self.progress_label.setMinimumHeight(30)  # 增加高度以便于点击
+        progress_layout.addWidget(self.progress_label)
         
         # 进度条
-        self.progressbar = ctk.CTkProgressBar(progress_frame)
-        self.progressbar.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
-        self.progressbar.set(0)
+        self.progressbar = QProgressBar()
+        self.progressbar.setMinimum(0)
+        self.progressbar.setMaximum(100)
+        self.progressbar.setValue(0)
+        progress_layout.addWidget(self.progressbar)
         
         # 按钮框架
-        button_frame = ctk.CTkFrame(main_frame)
-        button_frame.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-        button_frame.grid_columnconfigure(0, weight=1)
+        button_frame = QFrame()
+        frame_layout.addWidget(button_frame)
+        button_layout = QHBoxLayout(button_frame)
+        button_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # 开始按钮
-        self.start_button = ctk.CTkButton(
-            button_frame,
-            text="开始处理",
-            command=self.start_processing,
-            height=40,  # 增加按钮高度
-            width=200   # 增加按钮宽度
-        )
-        self.start_button.grid(row=0, column=0, padx=5, pady=20)
+        self.start_button = QPushButton("开始处理")
+        self.start_button.setMinimumHeight(40)  # 增加按钮高度
+        self.start_button.setMinimumWidth(200)  # 增加按钮宽度
+        self.start_button.clicked.connect(self.start_processing)
+        button_layout.addWidget(self.start_button)
+        
+        # 设置主布局
+        if hasattr(self.parent, 'layout') and callable(self.parent.layout):
+            if self.parent.layout() is not None:
+                existing_layout = self.parent.layout()
+                existing_layout.addLayout(main_layout)
+            else:
+                self.parent.setLayout(main_layout)
         
     def update_progress(self, progress: float, message: str):
         """更新进度信息"""
-        self.progress_var.set(message)
-        self.progressbar.set(progress)
+        self.progress_label.setText(message)
+        self.progressbar.setValue(int(progress * 100))
         self.message_callback(message)
         
     def process_directory_safe(self):
@@ -93,8 +101,8 @@ class BatchTab(BaseTab):
             
             processor = FileProcessor()
             result = processor.process_directory(
-                Path(self.input_dir_var.get()),
-                Path(self.output_dir_var.get()),
+                Path(self.input_dir_line_edit.text()),
+                Path(self.output_dir_line_edit.text()),
                 self.update_progress
             )
             
@@ -120,23 +128,23 @@ class BatchTab(BaseTab):
             
         finally:
             # 重新启用开始按钮
-            self.start_button.configure(state="normal")
+            self.start_button.setEnabled(True)
             # 重置进度条状态
-            self.progressbar.set(0)
-            self.progress_var.set("准备就绪")
+            self.progressbar.setValue(0)
+            self.progress_label.setText("准备就绪")
             
     def start_processing(self):
         """开始处理文件"""
-        if not self.input_dir_var.get():
+        if not self.input_dir_line_edit.text():
             self.show_error("错误", "请选择输入目录")
             return
             
-        if not self.output_dir_var.get():
+        if not self.output_dir_line_edit.text():
             self.show_error("错误", "请选择输出目录")
             return
             
         # 禁用开始按钮
-        self.start_button.configure(state="disabled")
+        self.start_button.setEnabled(False)
         
         # 在新线程中处理文件
         thread = threading.Thread(target=self.process_directory_safe)

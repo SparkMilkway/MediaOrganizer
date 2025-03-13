@@ -1,213 +1,253 @@
-import customtkinter as ctk
+from PyQt6.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, 
+    QGridLayout, QPushButton, QLineEdit, QFileDialog,
+    QListWidget, QListWidgetItem, QSpinBox, QGroupBox, QMessageBox
+)
+from PyQt6.QtCore import Qt, QTimer
 from datetime import datetime
 from pathlib import Path
 import threading
 from typing import Callable, List
-from tkinter import filedialog
 
 from .base_tab import BaseTab
-from ..core import FileProcessor
 
 class ManualTab(BaseTab):
     """手动处理选项卡"""
     
-    def __init__(self, parent: ctk.CTkFrame, message_callback: Callable):
+    def __init__(self, parent: QWidget, message_callback: Callable):
         self.message_callback = message_callback
-        self.manual_files: List[str] = []
-        self.manual_output_dir_var = ctk.StringVar()
-        self.selected_files_var = ctk.StringVar(value="未选择文件")
-        
-        # 日期时间变量
-        self.year_var = ctk.StringVar(value=str(datetime.now().year))
-        self.month_var = ctk.StringVar(value=str(datetime.now().month))
-        self.day_var = ctk.StringVar(value=str(datetime.now().day))
-        self.hour_var = ctk.StringVar(value="12")
-        self.minute_var = ctk.StringVar(value="00")
-        
+        self.selected_files = []
+        self.output_dir_line_edit = QLineEdit()
+        self.file_list = None
+        self.year_spinbox = None
+        self.month_spinbox = None
+        self.day_spinbox = None
+        self.hour_spinbox = None
+        self.minute_spinbox = None
+        self.process_button = None
         super().__init__(parent)
         
     def setup_ui(self):
         """设置UI组件"""
-        # 文件选择框架
-        file_frame = ctk.CTkFrame(self.parent)
-        file_frame.grid(row=0, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+        # 主布局
+        main_layout = QVBoxLayout()
+        main_layout.setContentsMargins(20, 20, 20, 20)
         
-        # 选择文件按钮
-        ctk.CTkLabel(file_frame, text="选择需要手动处理的文件:").grid(
-            row=0, column=0, padx=5, pady=5, sticky="w"
-        )
-        ctk.CTkButton(file_frame, text="浏览文件", command=self.browse_files).grid(
-            row=0, column=1, padx=5, pady=5
-        )
+        # 主框架
+        main_frame = QFrame()
+        main_layout.addWidget(main_frame)
+        frame_layout = QVBoxLayout(main_frame)
         
-        # 显示选择的文件
-        self.selected_files_label = ctk.CTkLabel(
-            file_frame, 
-            textvariable=self.selected_files_var,
-            wraplength=600
-        )
-        self.selected_files_label.grid(
-            row=1, column=0, columnspan=2, padx=5, pady=5, sticky="w"
-        )
+        # 文件选择部分
+        file_frame = QFrame()
+        frame_layout.addWidget(file_frame)
+        file_layout = QHBoxLayout(file_frame)
         
-        # 日期选择框架
-        date_frame = ctk.CTkFrame(self.parent)
-        date_frame.grid(row=1, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
+        # 浏览文件按钮
+        browse_button = QPushButton("浏览文件")
+        browse_button.setMinimumHeight(40)
+        browse_button.setMinimumWidth(120)
+        browse_button.clicked.connect(self.browse_files)
+        file_layout.addWidget(browse_button)
         
-        # 日期选择标题
-        ctk.CTkLabel(date_frame, text="设置照片拍摄日期:").grid(
-            row=0, column=0, padx=5, pady=5, sticky="w"
-        )
+        # 文件列表
+        list_frame = QFrame()
+        frame_layout.addWidget(list_frame)
+        list_layout = QVBoxLayout(list_frame)
         
-        # 日期输入框架
-        date_input_frame = ctk.CTkFrame(date_frame)
-        date_input_frame.grid(row=1, column=0, padx=5, pady=5, sticky="w")
+        list_label = QLabel("已选择的文件:")
+        list_layout.addWidget(list_label)
         
-        # 年月日时分输入
-        self.create_date_time_inputs(date_input_frame)
+        self.file_list = QListWidget()
+        self.file_list.setMinimumHeight(150)
+        list_layout.addWidget(self.file_list)
+        
+        # 日期时间设置
+        date_time_frame = QGroupBox("设置日期和时间")
+        frame_layout.addWidget(date_time_frame)
+        date_time_layout = QVBoxLayout(date_time_frame)
+        
+        # 创建日期时间输入
+        date_time_layout.addWidget(self.create_date_time_inputs())
         
         # 输出目录选择
-        output_frame = ctk.CTkFrame(self.parent)
-        output_frame.grid(row=2, column=0, columnspan=3, padx=5, pady=5, sticky="ew")
-        
         self.create_directory_selector(
-            output_frame,
-            "处理后的文件保存到:",
-            self.manual_output_dir_var,
-            lambda: self.browse_directory("选择输出目录", self.manual_output_dir_var),
-            row=0
+            main_frame,
+            "输出目录:",
+            self.output_dir_line_edit,
+            lambda: self.browse_directory("选择输出目录", self.output_dir_line_edit)
         )
         
         # 处理按钮
-        self.process_button = ctk.CTkButton(
-            self.parent,
-            text="处理选定的文件",
-            command=self.process_files,
-            height=40
-        )
-        self.process_button.grid(row=3, column=0, columnspan=3, padx=5, pady=20, sticky="ew")
+        button_frame = QFrame()
+        frame_layout.addWidget(button_frame)
+        button_layout = QHBoxLayout(button_frame)
+        button_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
-    def create_date_time_inputs(self, frame: ctk.CTkFrame):
-        """创建日期时间输入组件"""
-        # 年选择
-        ctk.CTkLabel(frame, text="年:").grid(row=0, column=0, padx=5, pady=5)
-        year_entry = ctk.CTkEntry(frame, textvariable=self.year_var, width=60)
-        year_entry.grid(row=0, column=1, padx=5, pady=5)
+        self.process_button = QPushButton("处理选定的文件")
+        self.process_button.setMinimumHeight(40)
+        self.process_button.setMinimumWidth(200)
+        self.process_button.clicked.connect(self.process_files)
+        button_layout.addWidget(self.process_button)
         
-        # 月选择
-        ctk.CTkLabel(frame, text="月:").grid(row=0, column=2, padx=5, pady=5)
-        month_entry = ctk.CTkEntry(frame, textvariable=self.month_var, width=40)
-        month_entry.grid(row=0, column=3, padx=5, pady=5)
+        # 设置主布局
+        if hasattr(self.parent, 'layout') and callable(self.parent.layout):
+            if self.parent.layout() is not None:
+                existing_layout = self.parent.layout()
+                existing_layout.addLayout(main_layout)
+            else:
+                self.parent.setLayout(main_layout)
         
-        # 日选择
-        ctk.CTkLabel(frame, text="日:").grid(row=0, column=4, padx=5, pady=5)
-        day_entry = ctk.CTkEntry(frame, textvariable=self.day_var, width=40)
-        day_entry.grid(row=0, column=5, padx=5, pady=5)
+    def create_date_time_inputs(self) -> QWidget:
+        """创建日期时间输入控件"""
+        date_time_widget = QWidget()
+        layout = QGridLayout(date_time_widget)
         
-        # 时间选择
-        ctk.CTkLabel(frame, text="时:").grid(row=0, column=6, padx=5, pady=5)
-        hour_entry = ctk.CTkEntry(frame, textvariable=self.hour_var, width=40)
-        hour_entry.grid(row=0, column=7, padx=5, pady=5)
+        # 年份
+        layout.addWidget(QLabel("年:"), 0, 0)
+        self.year_spinbox = QSpinBox()
+        self.year_spinbox.setMinimum(1970)
+        self.year_spinbox.setMaximum(2100)
+        self.year_spinbox.setValue(datetime.now().year)
+        self.year_spinbox.setMinimumHeight(32)
+        layout.addWidget(self.year_spinbox, 0, 1)
         
-        ctk.CTkLabel(frame, text="分:").grid(row=0, column=8, padx=5, pady=5)
-        minute_entry = ctk.CTkEntry(frame, textvariable=self.minute_var, width=40)
-        minute_entry.grid(row=0, column=9, padx=5, pady=5)
+        # 月份
+        layout.addWidget(QLabel("月:"), 0, 2)
+        self.month_spinbox = QSpinBox()
+        self.month_spinbox.setMinimum(1)
+        self.month_spinbox.setMaximum(12)
+        self.month_spinbox.setValue(datetime.now().month)
+        self.month_spinbox.setMinimumHeight(32)
+        layout.addWidget(self.month_spinbox, 0, 3)
+        
+        # 日
+        layout.addWidget(QLabel("日:"), 0, 4)
+        self.day_spinbox = QSpinBox()
+        self.day_spinbox.setMinimum(1)
+        self.day_spinbox.setMaximum(31)
+        self.day_spinbox.setValue(datetime.now().day)
+        self.day_spinbox.setMinimumHeight(32)
+        layout.addWidget(self.day_spinbox, 0, 5)
+        
+        # 小时
+        layout.addWidget(QLabel("时:"), 1, 0)
+        self.hour_spinbox = QSpinBox()
+        self.hour_spinbox.setMinimum(0)
+        self.hour_spinbox.setMaximum(23)
+        self.hour_spinbox.setValue(datetime.now().hour)
+        self.hour_spinbox.setMinimumHeight(32)
+        layout.addWidget(self.hour_spinbox, 1, 1)
+        
+        # 分钟
+        layout.addWidget(QLabel("分:"), 1, 2)
+        self.minute_spinbox = QSpinBox()
+        self.minute_spinbox.setMinimum(0)
+        self.minute_spinbox.setMaximum(59)
+        self.minute_spinbox.setValue(datetime.now().minute)
+        self.minute_spinbox.setMinimumHeight(32)
+        layout.addWidget(self.minute_spinbox, 1, 3)
+        
+        return date_time_widget
         
     def browse_files(self):
-        """浏览并选择需要手动处理的文件"""
-        files = filedialog.askopenfilenames(
-            title="选择需要手动处理的照片/视频",
-            filetypes=[
-                ("图片文件", "*.jpg *.jpeg *.png *.heic *.heif"),
-                ("视频文件", "*.mp4 *.mov *.MOV"),
-                ("所有文件", "*.*")
-            ]
+        """浏览并选择文件"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self.parent,
+            "选择照片或视频文件",
+            "",
+            "媒体文件 (*.jpg *.jpeg *.png *.heic *.heif *.mp4 *.mov *.MOV)"
         )
         
         if files:
-            self.manual_files = list(files)
-            if len(files) <= 3:
-                file_names = ", ".join([Path(f).name for f in files])
-            else:
-                file_names = ", ".join([Path(f).name for f in files[:3]]) + f"...等 {len(files)} 个文件"
+            self.selected_files = files
+            self.update_file_list()
             
-            self.selected_files_var.set(f"已选择: {file_names}")
-            self.message_callback(f"已选择 {len(files)} 个文件进行手动处理")
-            
-            # 如果没有设置输出目录，则使用第一个文件的目录作为默认输出目录
-            if not self.manual_output_dir_var.get() and files:
-                default_output = str(Path(files[0]).parent)
-                self.manual_output_dir_var.set(default_output)
-                
+    def update_file_list(self):
+        """更新文件列表显示"""
+        self.file_list.clear()
+        for file in self.selected_files:
+            self.file_list.addItem(QListWidgetItem(Path(file).name))
+        
     def process_files(self):
-        """处理手动选择的文件"""
-        if not self.manual_files:
-            self.show_error("错误", "请先选择需要处理的文件")
+        """处理选定的文件"""
+        if not self.selected_files:
+            self.show_error("错误", "请先选择文件")
             return
             
-        if not self.manual_output_dir_var.get():
+        if not self.output_dir_line_edit.text():
             self.show_error("错误", "请选择输出目录")
             return
             
-        # 获取用户设置的日期
         try:
-            year = int(self.year_var.get())
-            month = int(self.month_var.get())
-            day = int(self.day_var.get())
-            hour = int(self.hour_var.get())
-            minute = int(self.minute_var.get())
+            # 获取设置的日期时间
+            year = self.year_spinbox.value()
+            month = self.month_spinbox.value()
+            day = self.day_spinbox.value()
+            hour = self.hour_spinbox.value()
+            minute = self.minute_spinbox.value()
             
-            user_date = datetime(year, month, day, hour, minute)
-        except ValueError as e:
-            self.show_error("错误", f"日期格式无效: {str(e)}")
-            return
+            # 创建日期时间对象
+            try:
+                date_time = datetime(year, month, day, hour, minute)
+            except ValueError as e:
+                self.show_error("日期错误", f"无效的日期时间: {str(e)}")
+                return
+                
+            # 禁用处理按钮
+            self.process_button.setEnabled(False)
             
-        # 禁用处理按钮
-        self.process_button.configure(state="disabled")
-        
-        # 在新线程中处理文件
-        thread = threading.Thread(
-            target=self.process_files_thread,
-            args=(user_date,)
-        )
-        thread.daemon = True
-        thread.start()
-        
-    def process_files_thread(self, user_date: datetime):
-        """在线程中处理手动选择的文件"""
+            # 在新线程中处理文件
+            thread = threading.Thread(
+                target=self.process_files_thread,
+                args=(date_time,)
+            )
+            thread.daemon = True
+            thread.start()
+            
+        except Exception as e:
+            self.show_error("错误", f"处理文件时出错: {str(e)}")
+            self.process_button.setEnabled(True)
+            
+    def process_files_thread(self, date_time: datetime):
+        """在线程中处理文件"""
         try:
-            self.message_callback("开始处理手动选择的文件...")
+            from ..core.file_processor import FileProcessor
             
             processor = FileProcessor()
-            output_path = Path(self.manual_output_dir_var.get())
+            output_dir = Path(self.output_dir_line_edit.text())
             
-            processed_count = 0
-            success_count = 0
-            total_files = len(self.manual_files)
+            self.message_callback(f"开始处理 {len(self.selected_files)} 个文件...")
             
-            for file_path in self.manual_files:
-                if processor.process_file(Path(file_path), output_path, user_date):
-                    success_count += 1
-                processed_count += 1
-                
-                self.message_callback(
-                    f"已处理文件 {Path(file_path).name} ({processed_count}/{total_files})"
-                )
-                
-            self.message_callback(f"所有手动选择的文件处理完成！共处理 {processed_count} 个文件")
+            for i, file_path in enumerate(self.selected_files):
+                try:
+                    file_path = Path(file_path)
+                    progress = (i + 1) / len(self.selected_files)
+                    
+                    self.message_callback(f"处理文件 {i+1}/{len(self.selected_files)}: {file_path.name}")
+                    
+                    # 处理单个文件
+                    processor.process_single_file_with_date(
+                        file_path,
+                        output_dir,
+                        date_time
+                    )
+                    
+                except Exception as e:
+                    self.message_callback(f"处理文件 {file_path.name} 时出错: {str(e)}")
+                    
+            self.message_callback("所有文件处理完成!")
             
-            # 显示完成提示
-            self.show_info("处理完成",
-                f"手动选择的文件处理完成！\n\n"
-                f"已将 {processed_count} 个文件处理为日期: "
-                f"{user_date.year}-{user_date.month:02d}-{user_date.day:02d} "
-                f"{user_date.hour:02d}:{user_date.minute:02d}")
+            # 使用QTimer.singleShot在主线程中显示完成对话框
+            files_count = len(self.selected_files)
+            QTimer.singleShot(0, lambda: self.show_info("处理完成", f"已完成 {files_count} 个文件的处理。"))
                 
         except Exception as e:
-            error_msg = f"处理文件时出错: {str(e)}"
-            self.message_callback(error_msg)
-            self.show_error("错误", error_msg)
+            self.message_callback(f"处理过程中发生错误: {str(e)}")
+            # 使用QTimer.singleShot在主线程中显示错误对话框
+            error_msg = str(e)
+            QTimer.singleShot(0, lambda: self.show_error("错误", f"处理过程中发生错误: {error_msg}"))
             
         finally:
-            # 启用处理按钮
-            self.process_button.configure(state="normal") 
+            # 使用QTimer.singleShot重新启用处理按钮
+            QTimer.singleShot(0, lambda: self.process_button.setEnabled(True)) 
