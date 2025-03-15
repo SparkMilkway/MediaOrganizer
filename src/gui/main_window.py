@@ -33,7 +33,7 @@ class PhotoOrganizerGUI(QMainWindow):
         super().__init__()
         
         # 配置主窗口
-        self.setWindowTitle("照片视频Exif日期修改整理工具")
+        self.setWindowTitle("照片视频整理及Exif修改工具")
         self.resize(900, 700)
         
         # 创建消息队列用于线程间通信
@@ -69,9 +69,9 @@ class PhotoOrganizerGUI(QMainWindow):
         self.tab_similarity.setLayout(QVBoxLayout())
         
         # 将选项卡添加到选项卡控件
-        self.tabview.addTab(self.tab_batch, "批量处理")
-        self.tabview.addTab(self.tab_manual, "手动处理")
-        self.tabview.addTab(self.tab_similarity, "相似照片")
+        self.tabview.addTab(self.tab_batch, "批量整理")
+        self.tabview.addTab(self.tab_manual, "手动修改日期")
+        self.tabview.addTab(self.tab_similarity, "相似照片查找")
         
         # 创建选项卡内容
         self.batch_tab = BatchTab(self.tab_batch, self.log_message)

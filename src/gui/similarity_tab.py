@@ -1,18 +1,49 @@
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame, 
     QGridLayout, QPushButton, QLineEdit, QFileDialog,
-    QSlider, QScrollArea, QSizePolicy, QGroupBox
+    QSlider, QScrollArea, QSizePolicy, QGroupBox, QCheckBox
 )
-from PyQt6.QtCore import Qt, QSize, QTimer
+from PyQt6.QtCore import Qt, QSize, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QPixmap, QImage
 from pathlib import Path
 import threading
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Set
 from PIL import Image
 import os
 
 from .base_tab import BaseTab
 from ..core.similarity import PhotoSimilarityFinder
+
+class SimilarityWorker(QObject):
+    """用于处理相似照片搜索的工作线程"""
+    finished = pyqtSignal(dict)  # 搜索完成信号
+    error = pyqtSignal(str)      # 错误信号
+    progress = pyqtSignal(str)   # 进度信号
+
+    def __init__(self):
+        super().__init__()
+        self.finder = PhotoSimilarityFinder()
+
+    def search(self, input_dir: str, threshold: int):
+        """执行搜索"""
+        try:
+            self.progress.emit("开始搜索相似照片...")
+            similar_photos = self.finder.find_similar_photos(
+                Path(input_dir),
+                hash_threshold=threshold
+            )
+            
+            if similar_photos:
+                self.progress.emit(f"搜索完成，找到 {len(similar_photos)} 组相似照片")
+                for group_id, files in similar_photos.items():
+                    self.progress.emit(f"组 {group_id} 包含 {len(files)} 张照片")
+                self.finished.emit(similar_photos)
+            else:
+                self.progress.emit("未找到相似照片。")
+                self.finished.emit({})
+                
+        except Exception as e:
+            self.error.emit(str(e))
 
 class SimilarityTab(BaseTab):
     """相似照片查找选项卡"""
@@ -25,7 +56,15 @@ class SimilarityTab(BaseTab):
         self.preview_area = None
         self.similar_photos = {}  # 存储相似照片组
         self.preview_widgets = {}  # 存储预览小部件
+        self.worker = SimilarityWorker()  # 创建工作线程对象
+        self.selected_photos: Set[str] = set()  # 存储选中的照片
+        self.thumbnail_size = 150  # 默认缩略图大小
         super().__init__(parent)
+        
+        # 连接信号
+        self.worker.finished.connect(self.on_search_finished)
+        self.worker.error.connect(self.on_search_error)
+        self.worker.progress.connect(self.message_callback)
         
     def setup_ui(self):
         """设置UI组件"""
@@ -65,10 +104,48 @@ class SimilarityTab(BaseTab):
         self.threshold_value_label = QLabel("5")
         threshold_layout.addWidget(self.threshold_value_label)
         
+        # 缩略图大小设置
+        size_frame = QFrame()
+        frame_layout.addWidget(size_frame)
+        size_layout = QHBoxLayout(size_frame)
+        
+        size_layout.addWidget(QLabel("缩略图大小:"))
+        
+        self.size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.size_slider.setMinimum(50)
+        self.size_slider.setMaximum(300)
+        self.size_slider.setValue(self.thumbnail_size)
+        self.size_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self.size_slider.setTickInterval(50)
+        self.size_slider.valueChanged.connect(self.update_thumbnail_size)
+        size_layout.addWidget(self.size_slider)
+        
+        self.size_value_label = QLabel(str(self.thumbnail_size))
+        size_layout.addWidget(self.size_value_label)
+        
         # 预览区域
         preview_group = QGroupBox("相似照片预览")
         frame_layout.addWidget(preview_group, 1)  # 1是拉伸因子
         preview_layout = QVBoxLayout(preview_group)
+        
+        # 批量操作按钮
+        batch_buttons = QFrame()
+        batch_layout = QHBoxLayout(batch_buttons)
+        
+        self.select_all_button = QPushButton("全选")
+        self.select_all_button.clicked.connect(self.select_all_photos)
+        batch_layout.addWidget(self.select_all_button)
+        
+        self.deselect_all_button = QPushButton("取消全选")
+        self.deselect_all_button.clicked.connect(self.deselect_all_photos)
+        batch_layout.addWidget(self.deselect_all_button)
+        
+        self.delete_selected_button = QPushButton("删除选中")
+        self.delete_selected_button.clicked.connect(self.delete_selected_photos)
+        self.delete_selected_button.setEnabled(False)
+        batch_layout.addWidget(self.delete_selected_button)
+        
+        preview_layout.addWidget(batch_buttons)
         
         self.preview_area = QScrollArea()
         self.preview_area.setWidgetResizable(True)
@@ -121,106 +198,123 @@ class SimilarityTab(BaseTab):
         # 在新线程中搜索
         threshold = self.threshold_slider.value()
         thread = threading.Thread(
-            target=self.search_thread,
+            target=self.worker.search,
             args=(input_dir, threshold)
         )
         thread.daemon = True
         thread.start()
         
-    def search_thread(self, input_dir: str, threshold: int):
-        """在线程中搜索相似照片"""
-        try:
-            self.message_callback("开始搜索相似照片...")
+    def on_search_finished(self, similar_photos: Dict):
+        """搜索完成的回调"""
+        self.similar_photos = similar_photos
+        if self.similar_photos:
+            self.show_similar_photos()
             
-            finder = PhotoSimilarityFinder()
-            self.similar_photos = finder.find_similar_photos(
-                Path(input_dir),
-                hash_threshold=threshold
-            )
-            
-            # 在主线程中更新UI
-            if self.similar_photos:
-                # 不使用QMetaObject.invokeMethod，而是通过父窗口的after方法安全地在主线程中调用
-                QTimer.singleShot(0, self.show_similar_photos)
-                self.message_callback(f"找到 {len(self.similar_photos)} 组相似照片。")
-            else:
-                self.message_callback("未找到相似照片。")
-                
-        except Exception as e:
-            self.message_callback(f"搜索过程中发生错误: {str(e)}")
-            
+    def on_search_error(self, error_msg: str):
+        """搜索错误的回调"""
+        self.message_callback(f"搜索过程中发生错误: {error_msg}")
+    
     def show_similar_photos(self):
         """显示相似照片"""
-        # 清除先前的预览
-        self.clear_preview()
-        
-        # 显示新的预览
-        for group_id, files in self.similar_photos.items():
-            # 组标题
-            group_frame = QFrame()
-            group_layout = QVBoxLayout(group_frame)
+        try:
+            # 清除先前的预览
+            self.clear_preview()
             
-            title_label = QLabel(f"相似组 {group_id} (共 {len(files)} 张照片)")
-            title_label.setStyleSheet("font-weight: bold;")
-            group_layout.addWidget(title_label)
-            
-            # 照片网格
-            photos_frame = QFrame()
-            photos_layout = QGridLayout(photos_frame)
-            group_layout.addWidget(photos_frame)
-            
-            # 每行显示3张照片
-            for i, file_path in enumerate(files):
-                file_info = PhotoSimilarityFinder.get_file_info(file_path)
-                file_frame = self.create_photo_preview(file_path, file_info, group_id)
+            if not self.similar_photos:
+                self.message_callback("没有相似照片需要显示")
+                return
                 
-                row = i // 3
-                col = i % 3
-                photos_layout.addWidget(file_frame, row, col)
+            self.message_callback("开始显示相似照片...")
             
-            # 分隔线
-            separator = QFrame()
-            separator.setFrameShape(QFrame.Shape.HLine)
-            separator.setFrameShadow(QFrame.Shadow.Sunken)
+            # 显示新的预览
+            for group_id, files in self.similar_photos.items():
+                self.message_callback(f"正在显示组 {group_id} 的照片...")
+                
+                # 组标题
+                group_frame = QFrame()
+                group_layout = QVBoxLayout(group_frame)
+                
+                title_label = QLabel(f"相似组 {group_id} (共 {len(files)} 张照片)")
+                title_label.setStyleSheet("font-weight: bold;")
+                group_layout.addWidget(title_label)
+                
+                # 照片网格
+                photos_frame = QFrame()
+                photos_layout = QGridLayout(photos_frame)
+                group_layout.addWidget(photos_frame)
+                
+                # 每行显示3张照片
+                for i, file_path in enumerate(files):
+                    self.message_callback(f"正在处理照片: {Path(file_path).name}")
+                    file_info = PhotoSimilarityFinder.get_file_info(file_path)
+                    file_frame = self.create_photo_preview(file_path, file_info, group_id)
+                    
+                    row = i // 3
+                    col = i % 3
+                    photos_layout.addWidget(file_frame, row, col)
+                
+                # 分隔线
+                separator = QFrame()
+                separator.setFrameShape(QFrame.Shape.HLine)
+                separator.setFrameShadow(QFrame.Shadow.Sunken)
+                
+                # 添加到预览区域
+                self.preview_layout.addWidget(group_frame)
+                self.preview_layout.addWidget(separator)
+                
+                # 保存小部件引用
+                self.preview_widgets[group_id] = group_frame
+                
+            self.message_callback("相似照片显示完成")
             
-            # 添加到预览区域
-            self.preview_layout.addWidget(group_frame)
-            self.preview_layout.addWidget(separator)
-            
-            # 保存小部件引用
-            self.preview_widgets[group_id] = group_frame
-            
+        except Exception as e:
+            self.message_callback(f"显示相似照片时发生错误: {str(e)}")
+            self.show_error("显示错误", f"无法显示相似照片: {str(e)}")
+    
     def create_photo_preview(self, file_path: str, file_info: Dict, group_id: int) -> QWidget:
         """创建照片预览小部件"""
         frame = QFrame()
         layout = QVBoxLayout(frame)
         
+        # 添加复选框
+        checkbox = QCheckBox()
+        checkbox.setChecked(file_path in self.selected_photos)
+        checkbox.stateChanged.connect(
+            lambda state, path=file_path: self.toggle_photo_selection(path, state == Qt.CheckState.Checked)
+        )
+        layout.addWidget(checkbox)
+        
         try:
-            # 缩略图
-            img = Image.open(file_path)
-            img.thumbnail((150, 150))
-            
-            # 转换为QPixmap
-            img_rgb = img.convert("RGB")
-            qimage = QImage(
-                img_rgb.tobytes(), 
-                img.width, 
-                img.height, 
-                img.width * 3,
-                QImage.Format.Format_RGB888
-            )
-            pixmap = QPixmap.fromImage(qimage)
-            
-            # 显示缩略图
-            image_label = QLabel()
-            image_label.setPixmap(pixmap)
-            image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            layout.addWidget(image_label)
-            
+            # 使用PIL打开图片
+            with Image.open(file_path) as img:
+                # 转换为RGB模式（处理RGBA等格式）
+                if img.mode != 'RGB':
+                    img = img.convert('RGB')
+                
+                # 计算缩放比例，保持宽高比
+                ratio = min(self.thumbnail_size / img.width, self.thumbnail_size / img.height)
+                new_size = (int(img.width * ratio), int(img.height * ratio))
+                
+                # 缩放图片
+                img = img.resize(new_size, Image.Resampling.LANCZOS)
+                
+                # 转换为QPixmap
+                img_data = img.tobytes("raw", "RGB")
+                qimage = QImage(img_data, img.width, img.height, img.width * 3, QImage.Format.Format_RGB888)
+                pixmap = QPixmap.fromImage(qimage)
+                
+                # 显示缩略图
+                image_label = QLabel()
+                image_label.setPixmap(pixmap)
+                image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                image_label.setMinimumSize(self.thumbnail_size, self.thumbnail_size)
+                layout.addWidget(image_label)
+                
         except Exception as e:
             # 如果无法加载图像，显示错误消息
-            error_label = QLabel("无法加载图像")
+            error_label = QLabel(f"无法加载图像: {str(e)}")
             error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            error_label.setMinimumSize(self.thumbnail_size, self.thumbnail_size)
             layout.addWidget(error_label)
             self.message_callback(f"无法加载图像 {Path(file_path).name}: {str(e)}")
         
@@ -229,19 +323,11 @@ class SimilarityTab(BaseTab):
         info_label = QLabel(
             f"文件: {Path(file_path).name}\n"
             f"大小: {file_size}\n"
-            f"修改时间: {file_info.get('mtime', 'N/A')}"
+            f"修改时间: {file_info.get('modified', 'N/A')}"
         )
         info_label.setWordWrap(True)
         info_label.setMinimumHeight(60)
         layout.addWidget(info_label)
-        
-        # 删除按钮
-        delete_button = QPushButton("删除")
-        delete_button.clicked.connect(
-            lambda checked=False, path=file_path, gid=group_id: 
-            self.delete_photo(path, gid)
-        )
-        layout.addWidget(delete_button)
         
         return frame
     
@@ -278,3 +364,66 @@ class SimilarityTab(BaseTab):
             
         # 清空存储
         self.preview_widgets = {} 
+
+    def update_thumbnail_size(self, value: int):
+        """更新缩略图大小"""
+        self.thumbnail_size = value
+        self.size_value_label.setText(str(value))
+        if self.similar_photos:
+            self.show_similar_photos()
+
+    def select_all_photos(self):
+        """全选所有照片"""
+        self.selected_photos.clear()
+        for group_files in self.similar_photos.values():
+            self.selected_photos.update(group_files)
+        self.update_selection_state()
+        self.show_similar_photos()
+
+    def deselect_all_photos(self):
+        """取消全选"""
+        self.selected_photos.clear()
+        self.update_selection_state()
+        self.show_similar_photos()
+
+    def update_selection_state(self):
+        """更新选择状态"""
+        self.delete_selected_button.setEnabled(len(self.selected_photos) > 0)
+
+    def delete_selected_photos(self):
+        """删除选中的照片"""
+        if not self.selected_photos:
+            return
+            
+        if self.confirm("确认删除", f"确定要删除选中的 {len(self.selected_photos)} 张照片吗？"):
+            try:
+                # 删除文件
+                for file_path in self.selected_photos:
+                    os.remove(file_path)
+                    self.message_callback(f"已删除文件: {file_path}")
+                
+                # 更新相似照片列表
+                new_similar_photos = {}
+                for group_id, files in self.similar_photos.items():
+                    remaining_files = [f for f in files if f not in self.selected_photos]
+                    if remaining_files:
+                        new_similar_photos[group_id] = remaining_files
+                
+                self.similar_photos = new_similar_photos
+                self.selected_photos.clear()
+                self.update_selection_state()
+                
+                # 重新显示预览
+                self.show_similar_photos()
+                
+            except Exception as e:
+                self.message_callback(f"删除文件时出错: {str(e)}")
+                self.show_error("删除错误", f"无法删除文件: {str(e)}")
+
+    def toggle_photo_selection(self, file_path: str, selected: bool):
+        """切换照片选择状态"""
+        if selected:
+            self.selected_photos.add(file_path)
+        else:
+            self.selected_photos.discard(file_path)
+        self.update_selection_state() 
